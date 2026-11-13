@@ -1,39 +1,25 @@
 name: Render YouTube Shorts
-
 on:
   repository_dispatch:
     types: [make-shorts]
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install FFmpeg and Korean Fonts
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-nanum
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-nanum
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install Python Packages
-        run: pip install edge-tts requests pillow
-
-      - name: Run Shorts Generator
-        env:
+      - run: pip install edge-tts requests pillow
+      - env:
           SHORTS_TITLE: ${{ github.event.client_payload.title }}
           SHORTS_QUESTION: ${{ github.event.client_payload.question }}
           SHORTS_ANSWER: ${{ github.event.client_payload.answer }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python make_shorts.py
-
-      - name: Send Video back to Make Webhook
-        run: |
+      - run: |
           curl -X POST "${{ github.event.client_payload.webhook_url }}" \
             -F "video=@output.mp4" \
             -F "row_number=${{ github.event.client_payload.row_number }}" \
