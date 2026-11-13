@@ -29,6 +29,7 @@ jobs:
           SHORTS_TITLE: ${{ github.event.client_payload.title }}
           SHORTS_QUESTION: ${{ github.event.client_payload.question }}
           SHORTS_ANSWER: ${{ github.event.client_payload.answer }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python make_shorts.py
 
       - name: Send Video back to Make Webhook
