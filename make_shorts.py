@@ -1,4 +1,4 @@
-import os, json, base64, urllib.parse, asyncio, subprocess, requests
+import os, re, json, base64, urllib.parse, asyncio, subprocess, requests
 from PIL import Image, ImageEnhance
 import edge_tts
 
@@ -9,8 +9,7 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 VOICE = "ko-KR-InJoonNeural"
 
 async def generate_tts(text, raw_file, final_file, rate="+15%", pad=0.25):
-    communicate = edge_tts.Communicate(text, VOICE, rate=rate, pitch="-1Hz", volume="+12%")
-    await communicate.save(raw_file)
+    await edge_tts.Communicate(text, VOICE, rate=rate, pitch="-1Hz", volume="+12%").save(raw_file)
     subprocess.run(["ffmpeg", "-y", "-i", raw_file, "-af", f"apad=pad_dur={pad}", "-c:a", "libmp3lame", "-q:a", "2", final_file], check=True)
 
 def get_duration(filename):
@@ -20,26 +19,21 @@ def get_duration(filename):
 def wrap_text(text, max_chars=11):
     words, lines, current = text.split(), [], ""
     for w in words:
-        if len(current) + len(w) + 1 <= max_chars:
-            current = (current + " " + w).strip()
-        else:
-            lines.append(current)
-            current = w
-    if current:
-        lines.append(current)
+        if len(current) + len(w) + 1 <= max_chars: current = (current + " " + w).strip()
+        else: lines.append(current); current = w
+    if current: lines.append(current)
     return "\n".join(lines)
 
 def generate_scene_prompts(question, answer):
     dq = "cute sad king character with empty pockets, 2d korean webtoon flat cartoon illustration, no text"
     dc = "cute nervous detective character looking at a ticking clock, suspenseful funny 2d korean webtoon flat cartoon illustration, no text"
     da = "cute coin character turning an empty wallet upside down, humorous punchline 2d korean webtoon flat cartoon illustration, no text"
-    if not GEMINI_KEY:
-        return dq, dc, da
+    if not GEMINI_KEY: return dq, dc, da
     try:
         url = f"https://googleapis.com{GEMINI_KEY}"
         sys_prompt = f"Korean dad joke riddle: '{question}', Answer: '{answer}'. Create 3 short English image prompts for cute 2D Korean webtoon flat vector cartoon illustrations (strictly NO text/letters). 1) 'q_prompt': humorous cute character illustrating the riddle setup. 2) 'c_prompt': cute nervous detective character with a ticking clock waiting for the answer. 3) 'a_prompt': funny cute character illustrating the wordplay answer. Return ONLY valid JSON: {{\"q_prompt\": \"...\", \"c_prompt\": \"...\", \"a_prompt\": \"...\"}}"
-        resp = requests.post(url, json={"contents": [{"parts": [{"text": sys_prompt}]}]}, timeout=20)
-        txt = resp.json()["candidates"][0]["content"]["parts"][0]["text"].replace("```json", "").replace("```", "").strip()
+        resp = requests.post(url, json={"contents": [{"parts": [{"text": sys_prompt}]}]}, timeout=25).json()
+        txt = resp["candidates"][0]["content"]["parts"][0]["text"].replace("```json", "").replace("```", "").strip()
         p = json.loads(txt)
         return p.get("q_prompt", dq), p.get("c_prompt", dc), p.get("a_prompt", da)
     except Exception as e:
@@ -49,60 +43,46 @@ def generate_scene_prompts(question, answer):
 def fetch_cartoon_image(prompt, out_path, fallback_color):
     full_prompt = f"{prompt}, cute 2D Korean webtoon flat vector cartoon art style, bright vibrant colors, clean outlines, vertical 9:16 composition, strictly no text, no letters, no words"
     if GEMINI_KEY:
-        for model_name in ["gemini-2.0-flash-preview-image-generation", "gemini-2.0-flash-exp-image-generation"]:
+        for m in ["gemini-2.5-flash-image", "gemini-2.0-flash-preview-image-generation", "gemini-2.0-flash-exp-image-generation"]:
             try:
-                url = f"https://googleapis.com{model_name}:generateContent?key={GEMINI_KEY}"
-                payload = {"contents": [{"parts": [{"text": full_prompt}]}], "generationConfig": {"responseModalities": ["IMAGE"]}}
-                resp = requests.post(url, json=payload, timeout=35)
-                parts = resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
-                for p in parts:
+                url = f"https://googleapis.com{m}:generateContent?key={GEMINI_KEY}"
+                resp = requests.post(url, json={"contents": [{"parts": [{"text": full_prompt}]}], "generationConfig": {"responseModalities": ["IMAGE"]}}, timeout=40).json()
+                for p in resp.get("candidates", [{}])[0].get("content", {}).get("parts", []):
                     if "inlineData" in p:
-                        with open("tmp_gem.png", "wb") as f:
-                            f.write(base64.b64decode(p["inlineData"]["data"]))
-                        img = ImageEnhance.Brightness(Image.open("tmp_gem.png").convert("RGB").resize((1080, 1920))).enhance(0.85)
-                        img.save(out_path, quality=92)
-                        print(f"Gemini 2D 카툰 생성 성공 ({model_name}): {out_path}")
+                        with open("tmp_gem.png", "wb") as f: f.write(base64.b64decode(p["inlineData"]["data"]))
+                        ImageEnhance.Brightness(Image.open("tmp_gem.png").convert("RGB").resize((1080, 1920))).enhance(0.85).save(out_path, quality=92)
+                        print(f"Gemini 2D 카툰 생성 성공 ({m}): {out_path}")
                         return True
-            except Exception as e:
-                print(f"{model_name} 예외:", e)
+            except Exception as e: print(f"{m} 예외:", e)
     try:
-        encoded = urllib.parse.quote(full_prompt)
-        url_p = f"https://pollinations.ai{encoded}?width=1080&height=1920&nologo=true&seed={abs(hash(full_prompt)) % 999999}"
+        url_p = f"https://pollinations.ai{urllib.parse.quote(full_prompt)}?width=1080&height=1920&nologo=true&seed={abs(hash(full_prompt)) % 999999}"
         resp_p = requests.get(url_p, headers={"User-Agent": "Mozilla/5.0"}, timeout=45)
         if resp_p.status_code == 200 and len(resp_p.content) > 8000:
-            with open("tmp_pol.jpg", "wb") as f:
-                f.write(resp_p.content)
-            img = ImageEnhance.Brightness(Image.open("tmp_pol.jpg").convert("RGB").resize((1080, 1920))).enhance(0.85)
-            img.save(out_path, quality=92)
+            with open("tmp_pol.jpg", "wb") as f: f.write(resp_p.content)
+            ImageEnhance.Brightness(Image.open("tmp_pol.jpg").convert("RGB").resize((1080, 1920))).enhance(0.85).save(out_path, quality=92)
             print(f"Pollinations 2D 카툰 생성 성공: {out_path}")
             return True
-    except Exception as e:
-        print("Pollinations 예외:", e)
+    except Exception as e: print("Pollinations 예외:", e)
     Image.new("RGB", (1080, 1920), color=fallback_color).save(out_path)
     return False
 
 async def main():
-    q_prompt, c_prompt, a_prompt = generate_scene_prompts(QUESTION, ANSWER)
-    fetch_cartoon_image(q_prompt, "bg_q.jpg", (28, 38, 64))
-    fetch_cartoon_image(c_prompt, "bg_c.jpg", (44, 34, 58))
-    fetch_cartoon_image(a_prompt, "bg_a.jpg", (54, 28, 64))
+    q_p, c_p, a_p = generate_scene_prompts(QUESTION, ANSWER)
+    fetch_cartoon_image(q_p, "bg_q.jpg", (28, 38, 64))
+    fetch_cartoon_image(c_p, "bg_c.jpg", (44, 34, 58))
+    fetch_cartoon_image(a_p, "bg_a.jpg", (54, 28, 64))
+    spoken_ans = re.sub(r'\([^)]*\)', '', ANSWER).strip() or ANSWER
     await generate_tts(f"{QUESTION}", "q_raw.mp3", "q.mp3", rate="+15%", pad=0.25)
     await generate_tts("과연 정답은, 삼, 이, 일!", "c_raw.mp3", "c.mp3", rate="+18%", pad=0.45)
-    await generate_tts(f"정답은 바로 {ANSWER}입니다!", "a_raw.mp3", "a.mp3", rate="+15%", pad=0.25)
+    await generate_tts(f"정답은 바로 {spoken_ans}입니다!", "a_raw.mp3", "a.mp3", rate="+15%", pad=0.25)
     await generate_tts("재밌었다면 구독과 좋아요 부탁드려요!", "s_raw.mp3", "s.mp3", rate="+15%", pad=0.35)
     d_q, d_c, d_a, d_s = get_duration("q.mp3"), get_duration("c.mp3"), get_duration("a.mp3"), get_duration("s.mp3")
     t1, t2, t3, total_dur = d_q, d_q + d_c, d_q + d_c + d_a, d_q + d_c + d_a + d_s
-    with open("concat.txt", "w") as f:
-        f.write("file 'q.mp3'\nfile 'c.mp3'\nfile 'a.mp3'\nfile 's.mp3'\n")
+    with open("concat.txt", "w") as f: f.write("file 'q.mp3'\nfile 'c.mp3'\nfile 'a.mp3'\nfile 's.mp3'\n")
     subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "concat.txt", "-c", "copy", "raw_audio.mp3"], check=True)
     subprocess.run(["ffmpeg", "-y", "-i", "raw_audio.mp3", "-filter:a", "loudnorm=I=-15:TP=-1.5:LRA=11", "full_audio.mp3"], check=True)
-    font_path = "/usr/share/fonts/truetype/nanum/NanumSquareRoundEB.ttf"
-    if not os.path.exists(font_path):
-        font_path = "/usr/share/fonts/truetype/nanum/NanumGothicExtraBold.ttf"
-    if not os.path.exists(font_path):
-        font_path = "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"
-    clean_title = TITLE.replace("#Shorts", "").replace("#넌센스퀴즈", "").strip()[:15]
-    with open("title.txt", "w", encoding="utf-8") as f: f.write(clean_title)
+    font_path = next((p for p in ["/usr/share/fonts/truetype/nanum/NanumSquareRoundEB.ttf", "/usr/share/fonts/truetype/nanum/NanumGothicExtraBold.ttf", "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"] if os.path.exists(p)), "")
+    with open("title.txt", "w", encoding="utf-8") as f: f.write(TITLE.replace("#Shorts", "").replace("#넌센스퀴즈", "").strip()[:15])
     with open("question.txt", "w", encoding="utf-8") as f: f.write(wrap_text(QUESTION, 11))
     with open("answer.txt", "w", encoding="utf-8") as f: f.write(f"정답 : {wrap_text(ANSWER, 10)}")
     with open("sub.txt", "w", encoding="utf-8") as f: f.write("재밌었다면 구독 & 좋아요 부탁드려요!")
@@ -122,9 +102,8 @@ async def main():
         f"drawbox=x=80:y=1500:w=920:h=110:color=#FF1744@0.92:t=fill:enable='gte(t,{t3})',"
         f"drawtext=fontfile={font_path}:textfile=sub.txt:fontcolor=white:fontsize=46:borderw=3:bordercolor=black:x=(w-text_w)/2:y=1532:enable='gte(t,{t3})'"
     )
-    cmd = ["ffmpeg", "-y", "-loop", "1", "-t", f"{total_dur}", "-i", "bg_q.jpg", "-loop", "1", "-t", f"{total_dur}", "-i", "bg_c.jpg", "-loop", "1", "-t", f"{total_dur}", "-i", "bg_a.jpg", "-i", "full_audio.mp3", "-filter_complex", vf, "-t", f"{total_dur}", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "output.mp4"]
-    subprocess.run(cmd, check=True)
-    print("3단계 장면 전환 + 깔끔한 오디오 쇼츠 완료: output.mp4")
+    subprocess.run(["ffmpeg", "-y", "-loop", "1", "-t", f"{total_dur}", "-i", "bg_q.jpg", "-loop", "1", "-t", f"{total_dur}", "-i", "bg_c.jpg", "-loop", "1", "-t", f"{total_dur}", "-i", "bg_a.jpg", "-i", "full_audio.mp3", "-filter_complex", vf, "-t", f"{total_dur}", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "output.mp4"], check=True)
+    print("쇼츠 렌더링 완료: output.mp4")
 
 if __name__ == "__main__":
     asyncio.run(main())
