@@ -1,4 +1,4 @@
-import os, re, json, base64, urllib.parse, asyncio, subprocess, requests
+import os, re, json, asyncio, subprocess, requests
 from PIL import Image, ImageEnhance
 import edge_tts
 
@@ -6,6 +6,7 @@ TITLE = os.environ.get("SHORTS_TITLE", "지니어스만 맞추는 레전드 아�
 QUESTION = os.environ.get("SHORTS_QUESTION", "세상에서 가장 가난한 왕은?")
 ANSWER = os.environ.get("SHORTS_ANSWER", "최저임금")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 VOICE = "ko-KR-InJoonNeural"
 
 async def generate_tts(text, raw_file, final_file, rate="+15%", pad=0.25):
@@ -42,39 +43,34 @@ def generate_scene_prompts(question, answer):
 
 def fetch_cartoon_image(prompt, out_path, fallback_color):
     full_prompt = f"{prompt}, cute 2D Korean webtoon flat vector cartoon art style, bright vibrant colors, clean outlines, vertical 9:16 composition, strictly no text, no letters, no words"
-    if GEMINI_KEY:
-        for m in ["gemini-2.5-flash-image", "gemini-2.0-flash-preview-image-generation", "gemini-2.0-flash-exp-image-generation"]:
+    if HF_TOKEN:
+        headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": "application/json"}
+        for model in ["black-forest-labs/FLUX.1-schnell", "stabilityai/stable-diffusion-xl-base-1.0"]:
             try:
-                url = f"https://googleapis.com{m}:generateContent?key={GEMINI_KEY}"
-                resp = requests.post(url, json={"contents": [{"parts": [{"text": full_prompt}]}], "generationConfig": {"responseModalities": ["IMAGE"]}}, timeout=40).json()
-                for p in resp.get("candidates", [{}])[0].get("content", {}).get("parts", []):
-                    if "inlineData" in p:
-                        with open("tmp_gem.png", "wb") as f: f.write(base64.b64decode(p["inlineData"]["data"]))
-                        ImageEnhance.Brightness(Image.open("tmp_gem.png").convert("RGB").resize((1080, 1920))).enhance(0.85).save(out_path, quality=92)
-                        print(f"Gemini 2D 카툰 생성 성공 ({m}): {out_path}")
-                        return True
-            except Exception as e: print(f"{m} 예외:", e)
-    try:
-        url_p = f"https://pollinations.ai{urllib.parse.quote(full_prompt)}?width=1080&height=1920&nologo=true&seed={abs(hash(full_prompt)) % 999999}"
-        resp_p = requests.get(url_p, headers={"User-Agent": "Mozilla/5.0"}, timeout=45)
-        if resp_p.status_code == 200 and len(resp_p.content) > 8000:
-            with open("tmp_pol.jpg", "wb") as f: f.write(resp_p.content)
-            ImageEnhance.Brightness(Image.open("tmp_pol.jpg").convert("RGB").resize((1080, 1920))).enhance(0.85).save(out_path, quality=92)
-            print(f"Pollinations 2D 카툰 생성 성공: {out_path}")
-            return True
-    except Exception as e: print("Pollinations 예외:", e)
+                url = f"https://huggingface.co{model}"
+                resp = requests.post(url, headers=headers, json={"inputs": full_prompt}, timeout=60)
+                if resp.status_code == 200 and len(resp.content) > 5000:
+                    with open("tmp_hf.jpg", "wb") as f: f.write(resp.content)
+                    ImageEnhance.Brightness(Image.open("tmp_hf.jpg").convert("RGB").resize((1080, 1920))).enhance(0.85).save(out_path, quality=92)
+                    print(f"HuggingFace 2D 카툰 생성 성공 ({model}): {out_path}")
+                    return True
+                else:
+                    print(f"HF 응답 ({model}):", resp.status_code, resp.text[:150])
+            except Exception as e:
+                print(f"HF 예외 ({model}):", e)
     Image.new("RGB", (1080, 1920), color=fallback_color).save(out_path)
     return False
 
 async def main():
     q_p, c_p, a_p = generate_scene_prompts(QUESTION, ANSWER)
+    print("장면1:", q_p, "\n장면2:", c_p, "\n장면3:", a_p)
     fetch_cartoon_image(q_p, "bg_q.jpg", (28, 38, 64))
     fetch_cartoon_image(c_p, "bg_c.jpg", (44, 34, 58))
     fetch_cartoon_image(a_p, "bg_a.jpg", (54, 28, 64))
     spoken_ans = re.sub(r'\([^)]*\)', '', ANSWER).strip() or ANSWER
     await generate_tts(f"{QUESTION}", "q_raw.mp3", "q.mp3", rate="+15%", pad=0.25)
     await generate_tts("과연 정답은, 삼, 이, 일!", "c_raw.mp3", "c.mp3", rate="+18%", pad=0.45)
-    await generate_tts(f"정답은 바로 {spoken_ans}입니다!", "a_raw.mp3", "a.mp3", rate="+15%", pad=0.25)
+    await generate_tts(f"정답은 바로! {spoken_ans}!", "a_raw.mp3", "a.mp3", rate="+15%", pad=0.25)
     await generate_tts("재밌었다면 구독과 좋아요 부탁드려요!", "s_raw.mp3", "s.mp3", rate="+15%", pad=0.35)
     d_q, d_c, d_a, d_s = get_duration("q.mp3"), get_duration("c.mp3"), get_duration("a.mp3"), get_duration("s.mp3")
     t1, t2, t3, total_dur = d_q, d_q + d_c, d_q + d_c + d_a, d_q + d_c + d_a + d_s
