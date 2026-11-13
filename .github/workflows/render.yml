@@ -21,8 +21,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install edge-tts
-        run: pip install edge-tts
+      - name: Install Python Packages
+        run: pip install edge-tts requests pillow
 
       - name: Run Shorts Generator
         env:
