@@ -38,11 +38,12 @@ def generate_scene_prompts(question, answer):
         p = json.loads(txt)
         return p.get("q_prompt", dq), p.get("c_prompt", dc), p.get("a_prompt", da)
     except Exception as e:
-        print("프롬프트 생성 예외:", e)
+        print("프롬프트 생성 예외:", e, flush=True)
         return dq, dc, da
 
 def fetch_cartoon_image(prompt, out_path, fallback_color):
     full_prompt = f"{prompt}, cute 2D Korean webtoon flat vector cartoon art style, bright vibrant colors, clean outlines, vertical 9:16 composition, strictly no text, no letters, no words"
+    print(f"HF 토큰 존재 여부: {bool(HF_TOKEN)} / 요청 시작: {out_path}", flush=True)
     if HF_TOKEN:
         headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": "application/json"}
         for model in ["black-forest-labs/FLUX.1-schnell", "stabilityai/stable-diffusion-xl-base-1.0"]:
@@ -52,18 +53,18 @@ def fetch_cartoon_image(prompt, out_path, fallback_color):
                 if resp.status_code == 200 and len(resp.content) > 5000:
                     with open("tmp_hf.jpg", "wb") as f: f.write(resp.content)
                     ImageEnhance.Brightness(Image.open("tmp_hf.jpg").convert("RGB").resize((1080, 1920))).enhance(0.85).save(out_path, quality=92)
-                    print(f"HuggingFace 2D 카툰 생성 성공 ({model}): {out_path}")
+                    print(f"HuggingFace 2D 카툰 생성 성공 ({model}): {out_path}", flush=True)
                     return True
                 else:
-                    print(f"HF 응답 ({model}):", resp.status_code, resp.text[:150])
+                    print(f"HF 응답 오류 ({model}): {resp.status_code} {resp.text[:150]}", flush=True)
             except Exception as e:
-                print(f"HF 예외 ({model}):", e)
+                print(f"HF 예외 ({model}): {e}", flush=True)
     Image.new("RGB", (1080, 1920), color=fallback_color).save(out_path)
     return False
 
 async def main():
     q_p, c_p, a_p = generate_scene_prompts(QUESTION, ANSWER)
-    print("장면1:", q_p, "\n장면2:", c_p, "\n장면3:", a_p)
+    print("장면1:", q_p, "\n장면2:", c_p, "\n장면3:", a_p, flush=True)
     fetch_cartoon_image(q_p, "bg_q.jpg", (28, 38, 64))
     fetch_cartoon_image(c_p, "bg_c.jpg", (44, 34, 58))
     fetch_cartoon_image(a_p, "bg_a.jpg", (54, 28, 64))
@@ -99,7 +100,7 @@ async def main():
         f"drawtext=fontfile={font_path}:textfile=sub.txt:fontcolor=white:fontsize=46:borderw=3:bordercolor=black:x=(w-text_w)/2:y=1532:enable='gte(t,{t3})'"
     )
     subprocess.run(["ffmpeg", "-y", "-loop", "1", "-t", f"{total_dur}", "-i", "bg_q.jpg", "-loop", "1", "-t", f"{total_dur}", "-i", "bg_c.jpg", "-loop", "1", "-t", f"{total_dur}", "-i", "bg_a.jpg", "-i", "full_audio.mp3", "-filter_complex", vf, "-t", f"{total_dur}", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "output.mp4"], check=True)
-    print("쇼츠 렌더링 완료: output.mp4")
+    print("쇼츠 렌더링 완료: output.mp4", flush=True)
 
 if __name__ == "__main__":
     asyncio.run(main())
