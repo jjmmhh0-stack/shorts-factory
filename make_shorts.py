@@ -26,21 +26,23 @@ def wrap_text(text, max_chars=11):
     return "\n".join(lines)
 
 def get_emoji_codes(question, answer):
-    dq, da = ["1f914", "2753"], ["1f606", "1f4a1"]
+    dq, da = ("1f914", "2753"), ("1f606", "1f4a1")
     if not GEMINI_KEY: return dq, da
     try:
         url = f"https://googleapis.com{GEMINI_KEY}"
         prompt = f"Korean riddle: '{question}', Answer: '{answer}'. Pick 2 Unicode hex emoji codes (lowercase, e.g. '1f9db' for vampire, '1f451' for crown, '1f353' for strawberry, '1f697' for car, '1f4b0' for money) that best represent: 1) 'q': the riddle object/character, 2) 'a': the punchline answer object/character. Return ONLY JSON: {{\"q\": \"hex\", \"a\": \"hex\"}}"
         resp = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15).json()
-        txt = resp["candidates"]["content"]["parts"]["text"].replace("```json", "").replace("```", "").strip()
+        first_cand = resp.get("candidates", [{}]).pop(0)
+        first_part = first_cand.get("content", {}).get("parts", [{}]).pop(0)
+        txt = first_part.get("text", "").replace("```json", "").replace("```", "").strip()
         d = json.loads(txt)
-        return [d.get("q", "1f914").lower(), "2753"], [d.get("a", "1f606").lower(), "1f4a1"]
+        return (d.get("q", "1f914").lower(), "2753"), (d.get("a", "1f606").lower(), "1f4a1")
     except Exception as e:
         print("이모지 매칭 예외:", e, flush=True)
         return dq, da
 
-def fetch_openmoji_png(hex_code, size=520):
-    for code in [hex_code, "1f604"]:
+def fetch_openmoji_png(hex_code, size=500):
+    for code in (hex_code, "1f604"):
         try:
             url = f"https://githubusercontent.com{code.upper()}.png"
             r = requests.get(url, timeout=15)
@@ -50,42 +52,44 @@ def fetch_openmoji_png(hex_code, size=520):
             pass
     return None
 
-def render_cartoon_scene(hex_list, theme, out_path):
+def render_cartoon_scene(hex_pair, theme, out_path):
     w, h = 1080, 1920
     themes = {
-        "q": ((30, 60, 114), (42, 82, 152), (255, 214, 0)),
-        "c": ((131, 58, 180), (253, 29, 29), (0, 229, 255)),
-        "a": ((17, 153, 142), (56, 239, 125), (255, 234, 0))
+        "q": ((30, 60, 114), (42, 82, 152)),
+        "c": ((131, 58, 180), (253, 29, 29)),
+        "a": ((17, 153, 142), (56, 239, 125))
     }
-    c1, c2, ray_col = themes[theme]
+    c1, c2 = themes[theme]
+    r1, g1, b1 = c1
+    r2, g2, b2 = c2
     img = Image.new("RGBA", (w, h))
     draw = ImageDraw.Draw(img)
     for y in range(h):
-        r = int(c1 + (c2 - c1) * (y / h))
-        g = int(c1 + (c2 - c1) * (y / h))
-        b = int(c1 + (c2 - c1) * (y / h))
+        r = int(r1 + (r2 - r1) * (y / h))
+        g = int(g1 + (g2 - g1) * (y / h))
+        b = int(b1 + (b2 - b1) * (y / h))
         draw.line([(0, y), (w, y)], fill=(r, g, b, 255))
-    cx, cy = 540, 1080
+    cx, cy = 540, 1060
     for deg in range(0, 360, 15):
         rad1, rad2 = math.radians(deg), math.radians(deg + 7)
         pts = [(cx, cy), (cx + int(1400 * math.cos(rad1)), cy + int(1400 * math.sin(rad1))), (cx + int(1400 * math.cos(rad2)), cy + int(1400 * math.sin(rad2)))]
         draw.polygon(pts, fill=(255, 255, 255, 28))
-    draw.ellipse([cx - 330, cy - 330, cx + 330, cy + 330], fill=(255, 255, 255, 55), outline=(255, 255, 255, 140), width=8)
-    main_icon = fetch_openmoji_png(hex_list, 500)
+    draw.ellipse([cx - 320, cy - 320, cx + 320, cy + 320], fill=(255, 255, 255, 55), outline=(255, 255, 255, 140), width=8)
+    main_code, sub_code = hex_pair
+    main_icon = fetch_openmoji_png(main_code, 480)
     if main_icon:
-        img.paste(main_icon, (cx - 250, cy - 250), main_icon)
-    if len(hex_list) > 1:
-        sub_icon = fetch_openmoji_png(hex_list, 200)
-        if sub_icon:
-            img.paste(sub_icon, (cx + 130, cy - 290), sub_icon)
+        img.paste(main_icon, (cx - 240, cy - 240), main_icon)
+    sub_icon = fetch_openmoji_png(sub_code, 190)
+    if sub_icon:
+        img.paste(sub_icon, (cx + 130, cy - 280), sub_icon)
     final_rgb = ImageEnhance.Brightness(img.convert("RGB")).enhance(0.92)
     final_rgb.save(out_path, quality=92)
-    print(f"2D 카툰 벡터 장면 생성 완료: {out_path} ({hex_list})", flush=True)
+    print(f"2D 카툰 벡터 장면 생성 완료: {out_path} ({hex_pair})", flush=True)
 
 async def main():
     q_hex, a_hex = get_emoji_codes(QUESTION, ANSWER)
     render_cartoon_scene(q_hex, "q", "bg_q.jpg")
-    render_cartoon_scene(["23f0", "1f575"], "c", "bg_c.jpg")
+    render_cartoon_scene(("23f0", "1f575"), "c", "bg_c.jpg")
     render_cartoon_scene(a_hex, "a", "bg_a.jpg")
     spoken_ans = re.sub(r'\([^)]*\)', '', ANSWER).strip() or ANSWER
     await generate_tts(f"{QUESTION}", "q_raw.mp3", "q.mp3", rate="+15%", end_pad=0.15)
