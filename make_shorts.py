@@ -1,4 +1,4 @@
-import os, re, io, json, math, asyncio, subprocess, requests
+import os, re, io, json, math, urllib.parse, asyncio, subprocess, requests
 from PIL import Image, ImageDraw, ImageEnhance
 import edge_tts
 
@@ -8,7 +8,7 @@ ANSWER = os.environ.get("SHORTS_ANSWER", "최저임금")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 VOICE = "ko-KR-InJoonNeural"
 
-async def generate_tts(text, raw_file, final_file, rate="+15%", end_pad=0.15):
+async def generate_tts(text, raw_file, final_file, rate="+16%", end_pad=0.12):
     await edge_tts.Communicate(text, VOICE, rate=rate, pitch="-1Hz", volume="+12%").save(raw_file)
     af = f"silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB,areverse,apad=pad_dur={end_pad}"
     subprocess.run(["ffmpeg", "-y", "-i", raw_file, "-af", af, "-c:a", "libmp3lame", "-q:a", "2", final_file], check=True)
@@ -25,77 +25,64 @@ def wrap_text(text, max_chars=11):
     if current: lines.append(current)
     return "\n".join(lines)
 
-def get_emoji_codes(question, answer):
-    dq, da = ("1f914", "2753"), ("1f606", "1f4a1")
-    if not GEMINI_KEY: return dq, da
+def get_cartoon_prompts(question, answer):
+    dq = "cute 2d korean webtoon comic illustration of a funny puzzled character scratching head, bright colorful background, no text"
+    dc = "cute 2d korean webtoon comic illustration of a nervous detective character holding a big ticking clock, dramatic colorful background, no text"
+    da = "cute 2d korean webtoon comic illustration of a happy laughing character with a glowing lightbulb idea, cheerful colorful background, no text"
+    if not GEMINI_KEY: return dq, dc, da
     try:
         url = f"https://googleapis.com{GEMINI_KEY}"
-        prompt = f"Korean riddle: '{question}', Answer: '{answer}'. Pick 2 Unicode hex emoji codes (lowercase, e.g. '1f9db' for vampire, '1f451' for crown, '1f353' for strawberry, '1f697' for car, '1f4b0' for money) that best represent: 1) 'q': the riddle object/character, 2) 'a': the punchline answer object/character. Return ONLY JSON: {{\"q\": \"hex\", \"a\": \"hex\"}}"
+        prompt = f"Korean riddle: '{question}', Answer: '{answer}'. Write 3 simple English image descriptions (letters and spaces ONLY, no punctuation) for cute 2D Korean webtoon anime cartoon illustrations with NO text in image: 1) 'q': funny character acting out the riddle scene, 2) 'c': cute detective with ticking clock, 3) 'a': funny character acting out the punchline answer. Return ONLY JSON: {{\"q\": \"...\", \"c\": \"...\", \"a\": \"...\"}}"
         resp = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15).json()
         first_cand = resp.get("candidates", [{}]).pop(0)
         first_part = first_cand.get("content", {}).get("parts", [{}]).pop(0)
         txt = first_part.get("text", "").replace("```json", "").replace("```", "").strip()
         d = json.loads(txt)
-        return (d.get("q", "1f914").lower(), "2753"), (d.get("a", "1f606").lower(), "1f4a1")
+        clean = lambda s: re.sub(r'[^a-zA-Z0-9 ]', '', s)
+        return clean(d.get("q", dq)), clean(d.get("c", dc)), clean(d.get("a", da))
     except Exception as e:
-        print("이모지 매칭 예외:", e, flush=True)
-        return dq, da
+        print("프롬프트 생성 예외:", e, flush=True)
+        return dq, dc, da
 
-def fetch_openmoji_png(hex_code, size=500):
-    for code in (hex_code, "1f604"):
+def fetch_2d_cartoon(prompt_words, theme, out_path):
+    style = "cute 2d korean webtoon flat cartoon illustration vibrant anime style clean lineart no text"
+    full = f"{prompt_words} {style}"
+    encoded = urllib.parse.quote(full)
+    seed = abs(hash(full + theme)) % 999999
+    for model in ["flux", "turbo"]:
         try:
-            url = f"https://githubusercontent.com{code.upper()}.png"
-            r = requests.get(url, timeout=15)
-            if r.status_code == 200:
-                return Image.open(io.BytesIO(r.content)).convert("RGBA").resize((size, size), Image.LANCZOS)
-        except Exception:
-            pass
-    return None
-
-def render_cartoon_scene(hex_pair, theme, out_path):
+            url = f"https://pollinations.ai{encoded}?width=768&height=1344&model={model}&nologo=true&seed={seed}"
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"}, timeout=45)
+            if r.status_code == 200 and "image" in r.headers.get("Content-Type", "") and len(r.content) > 12000:
+                img = Image.open(io.BytesIO(r.content)).convert("RGB").resize((1080, 1920), Image.LANCZOS)
+                ImageEnhance.Brightness(img).enhance(0.90).save(out_path, quality=92)
+                print(f"2D 웹툰 카툰 이미지 생성 성공 ({model}): {out_path}", flush=True)
+                return True
+        except Exception as e:
+            print(f"카툰 요청 예외 ({model}):", e, flush=True)
     w, h = 1080, 1920
-    themes = {
-        "q": ((30, 60, 114), (42, 82, 152)),
-        "c": ((131, 58, 180), (253, 29, 29)),
-        "a": ((17, 153, 142), (56, 239, 125))
-    }
-    c1, c2 = themes[theme]
+    pal = {"q": ((41, 128, 185), (109, 213, 250)), "c": ((211, 84, 0), (243, 156, 18)), "a": ((17, 153, 142), (56, 239, 125))}
+    c1, c2 = pal[theme]
     r1, g1, b1 = c1
     r2, g2, b2 = c2
-    img = Image.new("RGBA", (w, h))
+    img = Image.new("RGB", (w, h))
     draw = ImageDraw.Draw(img)
     for y in range(h):
-        r = int(r1 + (r2 - r1) * (y / h))
-        g = int(g1 + (g2 - g1) * (y / h))
-        b = int(b1 + (b2 - b1) * (y / h))
-        draw.line([(0, y), (w, y)], fill=(r, g, b, 255))
-    cx, cy = 540, 1060
-    for deg in range(0, 360, 15):
-        rad1, rad2 = math.radians(deg), math.radians(deg + 7)
-        pts = [(cx, cy), (cx + int(1400 * math.cos(rad1)), cy + int(1400 * math.sin(rad1))), (cx + int(1400 * math.cos(rad2)), cy + int(1400 * math.sin(rad2)))]
-        draw.polygon(pts, fill=(255, 255, 255, 28))
-    draw.ellipse([cx - 320, cy - 320, cx + 320, cy + 320], fill=(255, 255, 255, 55), outline=(255, 255, 255, 140), width=8)
-    main_code, sub_code = hex_pair
-    main_icon = fetch_openmoji_png(main_code, 480)
-    if main_icon:
-        img.paste(main_icon, (cx - 240, cy - 240), main_icon)
-    sub_icon = fetch_openmoji_png(sub_code, 190)
-    if sub_icon:
-        img.paste(sub_icon, (cx + 130, cy - 280), sub_icon)
-    final_rgb = ImageEnhance.Brightness(img.convert("RGB")).enhance(0.92)
-    final_rgb.save(out_path, quality=92)
-    print(f"2D 카툰 벡터 장면 생성 완료: {out_path} ({hex_pair})", flush=True)
+        draw.line([(0, y), (w, y)], fill=(int(r1+(r2-r1)*y/h), int(g1+(g2-g1)*y/h), int(b1+(b2-b1)*y/h)))
+    img.save(out_path, quality=90)
+    print(f"기본 그라데이션 대체: {out_path}", flush=True)
+    return False
 
 async def main():
-    q_hex, a_hex = get_emoji_codes(QUESTION, ANSWER)
-    render_cartoon_scene(q_hex, "q", "bg_q.jpg")
-    render_cartoon_scene(("23f0", "1f575"), "c", "bg_c.jpg")
-    render_cartoon_scene(a_hex, "a", "bg_a.jpg")
+    qp, cp, ap = get_cartoon_prompts(QUESTION, ANSWER)
+    fetch_2d_cartoon(qp, "q", "bg_q.jpg")
+    fetch_2d_cartoon(cp, "c", "bg_c.jpg")
+    fetch_2d_cartoon(ap, "a", "bg_a.jpg")
     spoken_ans = re.sub(r'\([^)]*\)', '', ANSWER).strip() or ANSWER
-    await generate_tts(f"{QUESTION}", "q_raw.mp3", "q.mp3", rate="+15%", end_pad=0.15)
-    await generate_tts("과연 정답은, 삼, 이, 일!", "c_raw.mp3", "c.mp3", rate="+18%", end_pad=0.12)
-    await generate_tts(f"정답은 바로! {spoken_ans}!", "a_raw.mp3", "a.mp3", rate="+15%", end_pad=0.15)
-    await generate_tts("재밌었다면 구독과 좋아요 부탁드려요!", "s_raw.mp3", "s.mp3", rate="+15%", end_pad=0.25)
+    await generate_tts(f"{QUESTION}", "q_raw.mp3", "q.mp3", rate="+16%", end_pad=0.12)
+    await generate_tts("과연 정답은 삼 이 일", "c_raw.mp3", "c.mp3", rate="+18%", end_pad=0.10)
+    await generate_tts(f"정답은 바로 {spoken_ans}", "a_raw.mp3", "a.mp3", rate="+16%", end_pad=0.15)
+    await generate_tts("재밌었다면 구독과 좋아요 부탁드려요", "s_raw.mp3", "s.mp3", rate="+16%", end_pad=0.25)
     d_q, d_c, d_a, d_s = get_duration("q.mp3"), get_duration("c.mp3"), get_duration("a.mp3"), get_duration("s.mp3")
     t1, t2, t3, total_dur = d_q, d_q + d_c, d_q + d_c + d_a, d_q + d_c + d_a + d_s
     with open("concat.txt", "w") as f: f.write("file 'q.mp3'\nfile 'c.mp3'\nfile 'a.mp3'\nfile 's.mp3'\n")
@@ -111,7 +98,7 @@ async def main():
         f"[bg0][bg1]overlay=enable='between(t,{t1},{t2})'[tmp1];[tmp1][bg2]overlay=enable='gte(t,{t2})'[bg];"
         f"[bg]drawbox=x=80:y=180:w=920:h=120:color=#FFD600:t=fill,"
         f"drawtext=fontfile={font_path}:textfile=title.txt:fontcolor=#111111:fontsize=56:x=(w-text_w)/2:y=212,"
-        f"drawbox=x=60:y=330:w=960:h=410:color=#0D1117@0.68:t=fill,"
+        f"drawbox=x=60:y=330:w=960:h=410:color=#0D1117@0.65:t=fill,"
         f"drawbox=x=60:y=330:w=960:h=410:color=#FFD600@0.9:t=4,"
         f"drawtext=fontfile={font_path}:text='Q.':fontcolor=#FFD600:fontsize=80:borderw=5:bordercolor=black:x=(w-text_w)/2:y=355,"
         f"drawtext=fontfile={font_path}:textfile=question.txt:fontcolor=white:fontsize=82:borderw=6:bordercolor=black:x=(w-text_w)/2:y=465:line_spacing=20,"
