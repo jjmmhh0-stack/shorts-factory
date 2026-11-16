@@ -25,40 +25,25 @@ def wrap_text(text, max_chars=11):
     if current: lines.append(current)
     return "\n".join(lines)
 
-def get_caricature_data(question, answer):
-    # 기본값 설정 (에러 방지용)
-    dq = "funny exaggerated 2d caricature cartoon of a comical character in a humorous situation colorful background no text"
-    dc = "funny exaggerated 2d caricature cartoon of a nervous character looking at a ticking clock colorful background no text"
-    da = "funny exaggerated 2d caricature cartoon of a character shouting in funny surprise colorful background no text"
+def get_quiz_emojis(question, answer):
+    # Gemini를 통해 질문과 정답에 가장 잘 어울리는 이모지 코드(Hex)만 정확히 받아옵니다.
     q_hex, a_hex = "1f914", "1f606"
-    if not GEMINI_KEY: return dq, dc, da, q_hex, a_hex
+    if not GEMINI_KEY: return q_hex, a_hex
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
-        # [핵심 수정] 퀴즈의 질문과 정답 상황을 그대로 묘사하도록 프롬프트 지시사항을 구체화
-        prompt = f"""
-        Korean riddle: '{question}', Answer: '{answer}'.
-        Based on this specific riddle and answer, write 3 descriptive English prompts (letters and spaces ONLY, no text in image) for funny exaggerated 2D caricature cartoons:
-        1) 'q': Visualizing the exact funny situation described in the riddle question (e.g., if throwing a ball to a king, show a funny court official throwing a ball at a king).
-        2) 'c': A funny dramatic suspense moment with a ticking clock or countdown expression.
-        3) 'a': Visualizing the exact punchline answer situation (e.g., looking apologetic or funny for '송구하옵니다').
-        Also pick 2 lowercase Unicode hex emoji codes ('q_hex', 'a_hex') matching the theme.
-        Return ONLY JSON: {{"q": "...", "c": "...", "a": "...", "q_hex": "...", "a_hex": "..."}}
-        """
+        prompt = f"Korean riddle: '{question}', Answer: '{answer}'. Pick 2 lowercase Unicode hex OpenMoji codes: 'q_hex' (matching question theme) and 'a_hex' (matching answer theme). Return ONLY JSON: {{\"q_hex\": \"...\", \"a_hex\": \"...\"}}"
         resp = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15).json()
         first_cand = resp.get("candidates", [{}]).pop(0)
         first_part = first_cand.get("content", {}).get("parts", [{}]).pop(0)
         txt = first_part.get("text", "").replace("```json", "").replace("```", "").strip()
         d = json.loads(txt)
-        clean = lambda s: re.sub(r'[^a-zA-Z0-9 ]', '', s)
-        return clean(d.get("q", dq)), clean(d.get("c", dc)), clean(d.get("a", da)), d.get("q_hex", "1f914").lower(), d.get("a_hex", "1f606").lower()
-    except Exception as e:
-        print("프롬프트 생성 예외:", e, flush=True)
-        return dq, dc, da, q_hex, a_hex
+        return d.get("q_hex", "1f914").lower(), d.get("a_hex", "1f606").lower()
+    except Exception:
+        return q_hex, a_hex
 
 def fetch_openmoji(hex_code, size=500):
     for code in (hex_code, "1f604"):
         try:
-            # [수정] 올바른 OpenMoji GitHub Raw 이미지 URL로 교체
             url = f"https://raw.githubusercontent.com/huggingface/open-source-assets/main/openmoji/{code.upper()}.png"
             r = requests.get(url, timeout=15)
             if r.status_code == 200:
@@ -67,48 +52,43 @@ def fetch_openmoji(hex_code, size=500):
             pass
     return None
 
-def fetch_caricature(prompt_words, hex_code, theme, out_path):
-    style = "funny exaggerated 2d caricature illustration expressive big head cartoon art vibrant colors clean outlines no text"
-    full = f"{prompt_words} {style}"
-    encoded = urllib.parse.quote(full)
-    seed = abs(hash(full + theme)) % 999999
-    for attempt in range(2):
-        try:
-            url = f"https://pollinations.ai/prompt/{encoded}?width=768&height=1344&model=flux&nologo=true&seed={seed + attempt}"
-            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"}, timeout=50)
-            if r.status_code == 200 and "image" in r.headers.get("Content-Type", "") and len(r.content) > 15000:
-                img = Image.open(io.BytesIO(r.content)).convert("RGB").resize((1080, 1920), Image.LANCZOS)
-                ImageEnhance.Brightness(img).enhance(0.90).save(out_path, quality=92)
-                print(f"2D 캐리커쳐 AI 이미지 생성 성공: {out_path}", flush=True)
-                return True
-        except Exception as e:
-            print(f"AI 캐리커쳐 재시도({attempt+1}):", e, flush=True)
+def create_clean_background(hex_code, theme, out_path):
+    # 참조 영상처럼 깔끔하고 화사한 파스텔/화이트 톤 배경에 직관적인 일러스트/이모지 중심의 화면 구성
     w, h = 1080, 1920
-    pal = {"q": ((36, 59, 85), (20, 30, 48)), "c": ((142, 45, 226), (74, 0, 224)), "a": ((17, 153, 142), (56, 239, 125))}
+    pal = {
+        "q": ((248, 249, 250), (233, 236, 239)), 
+        "c": ((255, 243, 205), (255, 224, 102)), 
+        "a": ((230, 255, 237), (198, 246, 213))
+    }
     c1, c2 = pal[theme]
     r1, g1, b1 = c1
     r2, g2, b2 = c2
+    
     img = Image.new("RGBA", (w, h))
     draw = ImageDraw.Draw(img)
+    
+    # 부드러운 그라데이션 배경
     for y in range(h):
         draw.line([(0, y), (w, y)], fill=(int(r1+(r2-r1)*y/h), int(g1+(g2-g1)*y/h), int(b1+(b2-b1)*y/h), 255))
-    cx, cy = 540, 1050
-    for deg in range(0, 360, 15):
-        rad1, rad2 = math.radians(deg), math.radians(deg + 7)
-        draw.polygon([(cx, cy), (cx + int(1400*math.cos(rad1)), cy + int(1400*math.sin(rad1))), (cx + int(1400*math.cos(rad2)), cy + int(1400*math.sin(rad2)))], fill=(255, 255, 255, 25))
-    draw.ellipse([cx-310, cy-310, cx+310, cy+310], fill=(255, 255, 255, 50), outline=(255, 255, 255, 130), width=8)
-    icon = fetch_openmoji(hex_code, 480)
+    
+    # 중앙 일러스트 원형 베이스
+    cx, cy = 540, 1020
+    draw.ellipse([cx-340, cy-340, cx+340, cy+340], fill=(255, 255, 255, 220), outline=(222, 226, 230, 255), width=6)
+    
+    # 이모지/일러스트 아이콘 배치
+    icon = fetch_openmoji(hex_code, 460)
     if icon:
-        img.paste(icon, (cx-240, cy-240), icon)
-    ImageEnhance.Brightness(img.convert("RGB")).enhance(0.92).save(out_path, quality=92)
-    print(f"캐리커쳐 백업 캐릭터 합성 완료: {out_path}", flush=True)
-    return False
+        img.paste(icon, (cx-230, cy-230), icon)
+        
+    img.convert("RGB").save(out_path, quality=95)
+    print(f"깔끔한 2D 일러스트 배경 생성 완료: {out_path}", flush=True)
 
 async def main():
-    qp, cp, ap, q_hex, a_hex = get_caricature_data(QUESTION, ANSWER)
-    fetch_caricature(qp, q_hex, "q", "bg_q.jpg")
-    fetch_caricature(cp, "23f0", "c", "bg_c.jpg")
-    fetch_caricature(ap, a_hex, "a", "bg_a.jpg")
+    q_hex, a_hex = get_quiz_emojis(QUESTION, ANSWER)
+    create_clean_background(q_hex, "q", "bg_q.jpg")
+    create_clean_background("23f0", "c", "bg_c.jpg") # 시계 아이콘 (3초 카운트다운용)
+    create_clean_background(a_hex, "a", "bg_a.jpg")
+
     spoken_ans = re.sub(r'\([^)]*\)', '', ANSWER).strip() or ANSWER
     await generate_tts(f"{QUESTION}", "q_raw.mp3", "q.mp3", rate="+16%", end_pad=0.12)
     await generate_tts("과연 정답은 삼 이 일", "c_raw.mp3", "c.mp3", rate="+18%", end_pad=0.10)
