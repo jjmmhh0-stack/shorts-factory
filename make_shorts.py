@@ -26,15 +26,24 @@ def wrap_text(text, max_chars=11):
     return "\n".join(lines)
 
 def get_caricature_data(question, answer):
-    dq = "funny exaggerated 2d caricature cartoon of a bewildered person scratching head colorful background no text"
-    dc = "funny exaggerated 2d caricature cartoon of a nervous detective holding giant ticking clock colorful background no text"
-    da = "funny exaggerated 2d caricature cartoon of a hilarious laughing character with lightbulb idea colorful background no text"
+    # 기본값 설정 (에러 방지용)
+    dq = "funny exaggerated 2d caricature cartoon of a comical character in a humorous situation colorful background no text"
+    dc = "funny exaggerated 2d caricature cartoon of a nervous character looking at a ticking clock colorful background no text"
+    da = "funny exaggerated 2d caricature cartoon of a character shouting in funny surprise colorful background no text"
     q_hex, a_hex = "1f914", "1f606"
     if not GEMINI_KEY: return dq, dc, da, q_hex, a_hex
     try:
-        # [수정] Gemini API 올바른 엔드포인트 URL로 교체
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
-        prompt = f"Korean riddle: '{question}', Answer: '{answer}'. 1) Write 3 simple English descriptions (letters and spaces ONLY) for funny exaggerated 2D caricature cartoon illustrations: 'q' (riddle character), 'c' (nervous detective with clock), 'a' (punchline answer character). 2) Also pick 2 lowercase Unicode hex emoji codes ('q_hex', 'a_hex') matching the riddle and answer objects. Return ONLY JSON: {{\"q\": \"...\", \"c\": \"...\", \"a\": \"...\", \"q_hex\": \"...\", \"a_hex\": \"...\"}}"
+        # [핵심 수정] 퀴즈의 질문과 정답 상황을 그대로 묘사하도록 프롬프트 지시사항을 구체화
+        prompt = f"""
+        Korean riddle: '{question}', Answer: '{answer}'.
+        Based on this specific riddle and answer, write 3 descriptive English prompts (letters and spaces ONLY, no text in image) for funny exaggerated 2D caricature cartoons:
+        1) 'q': Visualizing the exact funny situation described in the riddle question (e.g., if throwing a ball to a king, show a funny court official throwing a ball at a king).
+        2) 'c': A funny dramatic suspense moment with a ticking clock or countdown expression.
+        3) 'a': Visualizing the exact punchline answer situation (e.g., looking apologetic or funny for '송구하옵니다').
+        Also pick 2 lowercase Unicode hex emoji codes ('q_hex', 'a_hex') matching the theme.
+        Return ONLY JSON: {{"q": "...", "c": "...", "a": "...", "q_hex": "...", "a_hex": "..."}}
+        """
         resp = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15).json()
         first_cand = resp.get("candidates", [{}]).pop(0)
         first_part = first_cand.get("content", {}).get("parts", [{}]).pop(0)
