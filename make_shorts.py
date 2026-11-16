@@ -32,7 +32,8 @@ def get_caricature_data(question, answer):
     q_hex, a_hex = "1f914", "1f606"
     if not GEMINI_KEY: return dq, dc, da, q_hex, a_hex
     try:
-        url = f"https://googleapis.com{GEMINI_KEY}"
+        # [수정] Gemini API 올바른 엔드포인트 URL로 교체
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         prompt = f"Korean riddle: '{question}', Answer: '{answer}'. 1) Write 3 simple English descriptions (letters and spaces ONLY) for funny exaggerated 2D caricature cartoon illustrations: 'q' (riddle character), 'c' (nervous detective with clock), 'a' (punchline answer character). 2) Also pick 2 lowercase Unicode hex emoji codes ('q_hex', 'a_hex') matching the riddle and answer objects. Return ONLY JSON: {{\"q\": \"...\", \"c\": \"...\", \"a\": \"...\", \"q_hex\": \"...\", \"a_hex\": \"...\"}}"
         resp = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15).json()
         first_cand = resp.get("candidates", [{}]).pop(0)
@@ -48,7 +49,8 @@ def get_caricature_data(question, answer):
 def fetch_openmoji(hex_code, size=500):
     for code in (hex_code, "1f604"):
         try:
-            url = f"https://githubusercontent.com{code.upper()}.png"
+            # [수정] 올바른 OpenMoji GitHub Raw 이미지 URL로 교체
+            url = f"https://raw.githubusercontent.com/huggingface/open-source-assets/main/openmoji/{code.upper()}.png"
             r = requests.get(url, timeout=15)
             if r.status_code == 200:
                 return Image.open(io.BytesIO(r.content)).convert("RGBA").resize((size, size), Image.LANCZOS)
@@ -63,7 +65,7 @@ def fetch_caricature(prompt_words, hex_code, theme, out_path):
     seed = abs(hash(full + theme)) % 999999
     for attempt in range(2):
         try:
-            url = f"https://pollinations.ai{encoded}?width=768&height=1344&model=flux&nologo=true&seed={seed + attempt}"
+            url = f"https://pollinations.ai/prompt/{encoded}?width=768&height=1344&model=flux&nologo=true&seed={seed + attempt}"
             r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"}, timeout=50)
             if r.status_code == 200 and "image" in r.headers.get("Content-Type", "") and len(r.content) > 15000:
                 img = Image.open(io.BytesIO(r.content)).convert("RGB").resize((1080, 1920), Image.LANCZOS)
